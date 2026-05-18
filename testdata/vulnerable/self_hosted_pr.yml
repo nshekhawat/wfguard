@@ -1,0 +1,21 @@
+# Synthetic example of self-hosted runner exposed to fork PRs.
+#
+# Self-hosted runners on workflows that run code from forks are a host-escape
+# risk: a malicious PR can read previous build artifacts, leak persistent
+# state, or escape the runner sandbox onto the host network.
+#
+# Expected wfguard findings:
+#   - severity: high, kind: self-hosted-runner-pr
+
+name: PR build
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+      - run: ./build.sh

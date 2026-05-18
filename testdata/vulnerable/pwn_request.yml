@@ -1,0 +1,35 @@
+# Synthetic example of the "pwn-request" pattern.
+#
+# Detection: triggered by pull_request_target (so secrets are in scope) AND
+# checks out the PR HEAD ref (which contains attacker-controlled code).
+# An attacker who opens a PR can run arbitrary code with read access to the
+# repo's secrets.
+#
+# Expected wfguard findings:
+#   - severity: critical, kind: pwn-request    (rules pass)
+#   - severity: medium,   kind: unpinned-action (rules pass)
+#   - severity: medium,   kind: broad-permissions (rules pass, missing block)
+#
+# The agent should additionally identify the secrets-in-scope risk and
+# explain the exploit chain.
+
+name: Run integration tests
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm test
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          DB_URL: ${{ secrets.DB_URL }}

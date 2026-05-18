@@ -1,0 +1,32 @@
+# Synthetic example of unpinned action references that ARE worth flagging.
+#
+# wfguard's UnpinnedRule deliberately ignores trusted publishers like
+# `actions/*` and `github/*` — flagging them creates more noise than signal
+# in real repos. The rule only fires for unverified publishers (so a tag
+# mutation on a third-party action would silently swap in malicious code)
+# OR for any action with a known compromise in its history.
+#
+# This fixture exercises the unverified-publisher path:
+#   - thirdparty-vendor/some-tool@v1   (unverified, mutable tag → flagged)
+#   - randoorg/their-utility@main       (unverified, branch ref → flagged)
+#
+# Trusted-publisher mutable refs (e.g. actions/checkout@v4) are intentionally
+# included to confirm the rule does NOT fire on them.
+#
+# Expected wfguard findings:
+#   - severity: medium, kind: unpinned-action × 2  (the two third-party uses)
+
+name: CI
+on: push
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4                # trusted publisher, mutable — INTENTIONALLY not flagged
+      - uses: thirdparty-vendor/some-tool@v1     # flagged: unverified + tag
+      - uses: randoorg/their-utility@main        # flagged: unverified + branch
+      - run: ./build.sh

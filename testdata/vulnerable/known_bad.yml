@@ -1,0 +1,25 @@
+# Synthetic example referencing an action on the known-compromised list.
+#
+# tj-actions/changed-files was compromised in March 2025 — every published
+# tag was force-pushed onto a poisoned commit. wfguard should flag any
+# reference to it regardless of pin (the seeded note advises rotation if
+# secrets were in scope during the window).
+#
+# Expected wfguard findings:
+#   - severity: high,   kind: compromised-action (the tj-actions step)
+#   - severity: medium, kind: unpinned-action    (the tj-actions step is also unpinned)
+
+name: Detect changes
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+      - id: changed
+        uses: tj-actions/changed-files@v44
+      - run: echo "changed files=${{ steps.changed.outputs.all_changed_files }}"

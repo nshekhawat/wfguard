@@ -1,0 +1,23 @@
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# Build output
+bin/
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Generated reports
+*.sarif
+report.md
+
+# Editor / OS / tool state
+.DS_Store
+.idea/
+.vscode/
+.claude/
+*.swp
+*~

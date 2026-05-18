@@ -1,0 +1,19 @@
+# Synthetic example of overly broad permissions.
+#
+# Top-level write-all granted explicitly. All actions are SHA-pinned so no
+# other rules fire — this is a focused regression for BroadPermissionsRule.
+#
+# Expected wfguard findings:
+#   - severity: medium, kind: broad-permissions
+
+name: Deploy
+on: workflow_dispatch
+
+permissions: write-all
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+      - run: echo "deploying"

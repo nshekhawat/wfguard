@@ -1,0 +1,40 @@
+# Synthetic example of expression-injection sinks.
+#
+# Two sinks demonstrated:
+#   1. Direct: github.event.pull_request.title interpolated straight into a
+#      run body (most dangerous form).
+#   2. Indirect via env: github.event.issue.body bound to an env var that's
+#      then referenced inside a run body. This is the "recommended"
+#      mitigation for (1) but it remains exploitable through $() / backticks
+#      if the run is not careful with quoting.
+#
+# Expected wfguard findings:
+#   - severity: critical, kind: expression-injection (direct, step[2])
+#   - severity: high,     kind: expression-injection (env-indirect, step[3])
+#   - severity: medium,   kind: unpinned-action     × 1 (the checkout)
+
+name: PR triage
+on: pull_request_target
+
+permissions:
+  contents: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+
+      # Just a normal step — should not fire.
+      - run: echo "starting triage"
+
+      # (1) DIRECT injection: PR title flows literally into the run body.
+      - run: |
+          echo "PR title: ${{ github.event.pull_request.title }}"
+          git tag "${{ github.event.pull_request.title }}"
+
+      # (2) INDIRECT via env: still flagged as high.
+      - run: |
+          echo "issue body: $BODY"
+        env:
+          BODY: ${{ github.event.issue.body }}

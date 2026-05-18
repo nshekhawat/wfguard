@@ -1,0 +1,25 @@
+# A benign workflow that should produce zero wfguard findings.
+#
+# - Triggers are non-fork-reachable (push only on main).
+# - All actions are SHA-pinned.
+# - No expressions from github.event.* leak into shell.
+# - Top-level permissions are explicit and minimal.
+# - No self-hosted runners.
+
+name: CI
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+      - uses: actions/setup-go@a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+        with:
+          go-version: "1.23"
+      - run: go test ./...
