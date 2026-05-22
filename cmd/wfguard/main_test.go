@@ -13,8 +13,78 @@ import (
 	"testing"
 
 	"github.com/nshekhawat/wfguard/internal/findings"
+	"github.com/nshekhawat/wfguard/internal/llm"
 	"github.com/nshekhawat/wfguard/internal/workflow"
 )
+
+// ---- resolveGeneratorSpec ---------------------------------------------------
+
+func TestResolveGeneratorSpec_FlagWinsOverEnv(t *testing.T) {
+	t.Setenv("WFGUARD_BACKEND", "gemini")
+	t.Setenv("WFGUARD_OPENAI_BASE_URL", "http://from-env:1/v1")
+	t.Setenv("OPENAI_API_KEY", "env-key")
+
+	spec := resolveGeneratorSpec("openai", "http://from-flag:2/v1", "flag-key")
+	if spec.Backend != llm.BackendOpenAI {
+		t.Errorf("Backend = %q, want openai (flag wins)", spec.Backend)
+	}
+	if spec.OpenAIBaseURL != "http://from-flag:2/v1" {
+		t.Errorf("BaseURL = %q, want the flag value", spec.OpenAIBaseURL)
+	}
+	if spec.OpenAIAPIKey != "flag-key" {
+		t.Errorf("APIKey = %q, want the flag value", spec.OpenAIAPIKey)
+	}
+}
+
+func TestResolveGeneratorSpec_EnvFallback(t *testing.T) {
+	t.Setenv("WFGUARD_BACKEND", "openai")
+	t.Setenv("WFGUARD_OPENAI_BASE_URL", "http://192.168.1.2:8888/v1")
+	t.Setenv("OPENAI_API_KEY", "unsloth-key")
+
+	// All flags empty -> env supplies everything (the .env-only workflow).
+	spec := resolveGeneratorSpec("", "", "")
+	if spec.Backend != llm.BackendOpenAI {
+		t.Errorf("Backend = %q, want openai (from env)", spec.Backend)
+	}
+	if spec.OpenAIBaseURL != "http://192.168.1.2:8888/v1" {
+		t.Errorf("BaseURL = %q, want the env value", spec.OpenAIBaseURL)
+	}
+	if spec.OpenAIAPIKey != "unsloth-key" {
+		t.Errorf("APIKey = %q, want the env value", spec.OpenAIAPIKey)
+	}
+}
+
+func TestResolveGeneratorSpec_BuiltinDefaults(t *testing.T) {
+	// Clear the env so built-in defaults apply.
+	t.Setenv("WFGUARD_BACKEND", "")
+	t.Setenv("WFGUARD_OPENAI_BASE_URL", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	os.Unsetenv("WFGUARD_BACKEND")
+	os.Unsetenv("WFGUARD_OPENAI_BASE_URL")
+	os.Unsetenv("OPENAI_API_KEY")
+
+	spec := resolveGeneratorSpec("", "", "")
+	if spec.Backend != llm.BackendGemini {
+		t.Errorf("Backend = %q, want gemini default", spec.Backend)
+	}
+	if spec.OpenAIBaseURL != llm.DefaultOpenAIBaseURL {
+		t.Errorf("BaseURL = %q, want %q", spec.OpenAIBaseURL, llm.DefaultOpenAIBaseURL)
+	}
+}
+
+func TestEffectiveBackend(t *testing.T) {
+	t.Setenv("WFGUARD_BACKEND", "openai")
+	if got := effectiveBackend("gemini"); got != "gemini" {
+		t.Errorf("flag should win: got %q", got)
+	}
+	if got := effectiveBackend(""); got != "openai" {
+		t.Errorf("env should apply when flag empty: got %q", got)
+	}
+	os.Unsetenv("WFGUARD_BACKEND")
+	if got := effectiveBackend(""); got != string(llm.BackendGemini) {
+		t.Errorf("default should be gemini: got %q", got)
+	}
+}
 
 // ---- surfaceTriggers --------------------------------------------------------
 

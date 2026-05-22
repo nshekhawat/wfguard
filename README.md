@@ -53,24 +53,57 @@ Pick a backend and verify it's reachable.
    # → "OK — model reachable."
    ```
 
-### Option B — Local LLM via LM Studio
+### Option B — local / self-hosted OpenAI-compatible server
 
-1. Install [LM Studio](https://lmstudio.ai/), download a Gemma 4 build (e.g. `gemma-4-e4b-it-mlx`), and click **Start Server** (defaults to port 1234).
-2. Confirm the server is up:
+`--backend openai` talks to **any** server that speaks the OpenAI Chat
+Completions API. That covers most of the local-inference ecosystem:
 
-   ```bash
-   curl -s http://localhost:1234/v1/models
-   ```
+| Server | Typical base URL | API key? |
+|---|---|---|
+| [LM Studio](https://lmstudio.ai/) | `http://localhost:1234/v1` | no |
+| [Unsloth](https://github.com/unslothai/unsloth) server | `http://<host>:8888/v1` | yes (if started with one) |
+| [vLLM](https://github.com/vllm-project/vllm) | `http://localhost:8000/v1` | optional (`--api-key`) |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` | `http://localhost:8080/v1` | optional (`--api-key`) |
+| [Ollama](https://ollama.com/) | `http://localhost:11434/v1` | no |
+| Any hosted OpenAI-compatible gateway | provider URL | yes |
 
-3. Smoke-test wfguard against it (replace the model id with whatever LM Studio shows for `id`):
+Three things to point wfguard at a server:
 
-   ```bash
-   ./bin/wfguard smoke --backend openai --model gemma-4-e4b-it-mlx
-   # → "OK — model reachable."
-   ```
+1. **Backend** — `--backend openai` (or `WFGUARD_BACKEND=openai`)
+2. **Base URL** — `--openai-base-url <url>` (or `WFGUARD_OPENAI_BASE_URL`). Must include the `/v1` suffix. Default is `http://localhost:1234/v1`.
+3. **API key, only if the server requires one** — `--openai-api-key <key>` (or `OPENAI_API_KEY`). Leave unset for servers that don't authenticate (default LM Studio, Ollama).
 
-The same `--backend openai` works for any OpenAI-compatible endpoint:
-**vLLM**, **llama.cpp**'s `llama-server`, etc. Set `--openai-base-url` to the server's `/v1` URL.
+The cleanest setup is to put everything in `.env` and let it load automatically:
+
+```bash
+cp .env.example .env
+# edit .env:
+#   WFGUARD_BACKEND=openai
+#   WFGUARD_OPENAI_BASE_URL=http://192.168.1.2:8888/v1
+#   WFGUARD_MODEL=gemma-4-e4b-it
+#   OPENAI_API_KEY=<your-server-key>     # only if the server needs it
+```
+
+Then confirm reachability (lists what your server has loaded), and smoke-test:
+
+```bash
+curl -s ${WFGUARD_OPENAI_BASE_URL:-http://localhost:1234/v1}/models   # add -H "Authorization: Bearer $OPENAI_API_KEY" if required
+
+./bin/wfguard smoke    # uses the .env values; no flags needed
+# → "OK — model reachable."
+```
+
+Flags always override `.env`, so a one-off against a different server is just:
+
+```bash
+./bin/wfguard smoke \
+  --backend openai \
+  --openai-base-url http://192.168.1.2:8888/v1 \
+  --openai-api-key "$UNSLOTH_KEY" \
+  --model gemma-4-e4b-it
+```
+
+Use whatever model id your server reports under `GET <base-url>/models`.
 
 ---
 
@@ -85,9 +118,15 @@ The deterministic rules pass needs no API access; the LLM agent loop is opt-in v
 # Full agent loop using hosted Gemma 4 31B (the canonical mode)
 ./bin/wfguard scan /path/to/some/repo --llm
 
-# Full agent loop using local Gemma 4 via LM Studio
+# Full agent loop using a local / self-hosted OpenAI-compatible server.
+# If WFGUARD_BACKEND / WFGUARD_OPENAI_BASE_URL / OPENAI_API_KEY are set in
+# .env, this is just: ./bin/wfguard scan /path/to/some/repo --llm
 ./bin/wfguard scan /path/to/some/repo \
-  --llm --backend openai --model gemma-4-e4b-it-mlx
+  --llm \
+  --backend openai \
+  --openai-base-url http://192.168.1.2:8888/v1 \
+  --openai-api-key "$OPENAI_API_KEY" \
+  --model gemma-4-e4b-it
 
 # Emit SARIF for GitHub's code-scanning UI
 ./bin/wfguard scan /path/to/some/repo --report sarif --output report.sarif
@@ -109,10 +148,10 @@ By default the deterministic pass alone catches the common patterns
 | `--output, -o` | stdout (md), `report.sarif` (sarif) | Output file path. With `--report both`, writes `<output>.md` and `<output>.sarif` |
 | `--llm` | `false` | Run the LLM agent loop after the deterministic rules pass (extra audit findings) |
 | `--harden` | `false` | After the scan, ask Gemma 4 to generate per-file fixes for visible findings; writes a unified patch you can `git apply` |
-| `--backend` | `gemini` | LLM backend: `gemini` or `openai` (LM Studio / vLLM / etc.) |
-| `--model` | `gemma-4-31b-it` (or `$WFGUARD_MODEL`) | Model id. For `openai`, set this to whatever your local server shows |
-| `--openai-base-url` | `http://localhost:1234/v1` | OpenAI-compatible base URL |
-| `--openai-api-key` | `$OPENAI_API_KEY` | Optional — LM Studio doesn't require it |
+| `--backend` | `gemini` (or `$WFGUARD_BACKEND`) | LLM backend: `gemini` or `openai` (any OpenAI-compatible server) |
+| `--model` | `gemma-4-31b-it` (or `$WFGUARD_MODEL`) | Model id. For `openai`, whatever your server reports at `GET <base-url>/models` |
+| `--openai-base-url` | `http://localhost:1234/v1` (or `$WFGUARD_OPENAI_BASE_URL`) | OpenAI-compatible base URL, including the `/v1` suffix |
+| `--openai-api-key` | `$OPENAI_API_KEY` | API key for the endpoint. Required by gateways and servers like Unsloth; unset for servers that don't authenticate |
 | `--max-steps` | `15` | Max agent loop iterations per trigger surface |
 | `--min-severity` | `high` | Rendering / exit-code threshold: `critical` \| `high` \| `medium` \| `low`. Findings below this level are computed (and visible to the LLM agent as context) but not surfaced |
 | `--soft-fail` | `false` | Always exit 0. Default exits 1 if any finding lands at or above `--min-severity` |
@@ -206,12 +245,17 @@ Per-file failures (LLM declined, output didn't parse as YAML, no diff) are logge
 
 All of these can be set in `.env` (loaded automatically; never committed):
 
+Every flag has an env equivalent so the whole config can live in `.env`.
+Explicit flags always override env vars.
+
 | Var | Used by | Notes |
 |---|---|---|
-| `GEMINI_API_KEY` | Gemini backend | Required for `--llm` with the default backend |
-| `GITHUB_TOKEN` | Resolver | Personal access token, scope `public_repo` (or `repo` for private). Without it, anonymous GitHub API rate limits apply (~60 req/hr) |
-| `OPENAI_API_KEY` | OpenAI backend | Optional — LM Studio doesn't require one |
-| `WFGUARD_MODEL` | both | Default model id for `--model`. Useful if you always want a non-default model |
+| `GITHUB_TOKEN` | Resolver (both backends) | Personal access token, scope `public_repo` (or `repo` for private). Without it, anonymous GitHub API rate limits apply (~60 req/hr) |
+| `WFGUARD_BACKEND` | backend selection | `gemini` (default) or `openai`. Equivalent to `--backend` |
+| `WFGUARD_MODEL` | both | Default model id, equivalent to `--model` |
+| `GEMINI_API_KEY` | Gemini backend | Required when `WFGUARD_BACKEND=gemini` (the default) and you use `--llm`/`--harden` |
+| `WFGUARD_OPENAI_BASE_URL` | OpenAI backend | Base URL incl. `/v1`, e.g. `http://192.168.1.2:8888/v1`. Equivalent to `--openai-base-url`. Default `http://localhost:1234/v1` |
+| `OPENAI_API_KEY` | OpenAI backend | API key for the endpoint. Required by gateways and servers like Unsloth; leave blank for servers that don't authenticate (default LM Studio, Ollama) |
 | `WFGUARD_LOG_LEVEL` | logging | `debug` \| `info` \| `warn` \| `error`. Default `info` |
 
 ---
