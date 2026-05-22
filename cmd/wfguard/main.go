@@ -98,19 +98,22 @@ func newScanCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&f.harden, "harden", false, "after the scan, ask the LLM to generate per-file fixes for visible findings; writes a unified patch (apply with `git apply`)")
 	cmd.Flags().BoolVar(&f.softFail, "soft-fail", false, "always exit 0 (default: exit 1 if any finding is at or above --min-severity)")
 	cmd.Flags().StringVar(&f.minSeverity, "min-severity", "high", "rendering / exit-code threshold: critical | high | medium | low. Findings below this level are computed but not shown")
-	cmd.Flags().StringVar(&f.backend, "backend", string(llm.BackendGemini), "LLM backend: gemini | openai (LM Studio / vLLM / openai-compatible)")
-	cmd.Flags().StringVar(&f.openaiBaseURL, "openai-base-url", llm.DefaultOpenAIBaseURL, "OpenAI-compatible base URL (used with --backend openai)")
+	// Defaults are left empty so the flag → env → built-in-default
+	// precedence can be resolved in resolveGeneratorSpec. The effective
+	// defaults are documented in the help text.
+	cmd.Flags().StringVar(&f.backend, "backend", "", "LLM backend: gemini | openai (any OpenAI-compatible server: Unsloth, vLLM, llama.cpp, Ollama, LM Studio). Default gemini, or $WFGUARD_BACKEND")
+	cmd.Flags().StringVar(&f.openaiBaseURL, "openai-base-url", "", "OpenAI-compatible base URL for --backend openai, e.g. http://192.168.1.2:8888/v1. Default "+llm.DefaultOpenAIBaseURL+", or $WFGUARD_OPENAI_BASE_URL")
 	// IMPORTANT: do NOT pass os.Getenv(...) as the default value here.
 	// Cobra prints the default in --help, which would leak the key.
 	// We fall back to the env var at runtime instead.
-	cmd.Flags().StringVar(&f.openaiAPIKey, "openai-api-key", "", "OpenAI API key (or env $OPENAI_API_KEY; LM Studio doesn't require one)")
+	cmd.Flags().StringVar(&f.openaiAPIKey, "openai-api-key", "", "API key for the OpenAI-compatible endpoint (or env $OPENAI_API_KEY). Required by hosted gateways and servers like Unsloth; LM Studio doesn't need one")
 	return cmd
 }
 
 // runScan is the testable body of the scan subcommand.
 func runScan(ctx context.Context, repoPath string, f scanFlags) error {
 	slog.Info("scan", "path", repoPath, "report", f.reportFmt,
-		"llm", f.useLLM, "harden", f.harden, "backend", f.backend)
+		"llm", f.useLLM, "harden", f.harden, "backend", effectiveBackend(f.backend))
 
 	// 1. Ingest.
 	workflows, parseErrs := ingest.ScanRepo(repoPath)
@@ -186,16 +189,44 @@ func runScan(ctx context.Context, repoPath string, f scanFlags) error {
 // buildGenerator constructs the LLM Generator from CLI flags + env. Shared
 // by the agent pass and the hardener.
 func buildGenerator(ctx context.Context, f scanFlags) (llm.Generator, error) {
-	openaiKey := f.openaiAPIKey
-	if openaiKey == "" {
-		openaiKey = os.Getenv("OPENAI_API_KEY")
+	return llm.NewGenerator(ctx, resolveGeneratorSpec(f.backend, f.openaiBaseURL, f.openaiAPIKey))
+}
+
+// resolveGeneratorSpec applies flag → env → built-in-default precedence for
+// the backend settings, so the whole local-endpoint config can live in
+// .env (loaded at startup). An explicit flag always wins over an env var.
+//
+// Recognized env vars:
+//
+//	WFGUARD_BACKEND          gemini | openai
+//	WFGUARD_OPENAI_BASE_URL  e.g. http://192.168.1.2:8888/v1
+//	OPENAI_API_KEY           bearer token for endpoints that require one
+//	GEMINI_API_KEY           key for the gemini backend
+func resolveGeneratorSpec(backend, baseURL, apiKey string) llm.GeneratorSpec {
+	if backend == "" {
+		backend = envOr("WFGUARD_BACKEND", string(llm.BackendGemini))
 	}
-	return llm.NewGenerator(ctx, llm.GeneratorSpec{
-		Backend:       llm.Backend(f.backend),
+	if baseURL == "" {
+		baseURL = envOr("WFGUARD_OPENAI_BASE_URL", llm.DefaultOpenAIBaseURL)
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
+	return llm.GeneratorSpec{
+		Backend:       llm.Backend(backend),
 		GeminiAPIKey:  os.Getenv("GEMINI_API_KEY"),
-		OpenAIBaseURL: f.openaiBaseURL,
-		OpenAIAPIKey:  openaiKey,
-	})
+		OpenAIBaseURL: baseURL,
+		OpenAIAPIKey:  apiKey,
+	}
+}
+
+// effectiveBackend resolves the backend name for logging/display, mirroring
+// the precedence in resolveGeneratorSpec.
+func effectiveBackend(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	return envOr("WFGUARD_BACKEND", string(llm.BackendGemini))
 }
 
 // runAgentPass wires up resolver + dispatcher + agent and runs one session
@@ -416,16 +447,8 @@ func newSmokeCmd() *cobra.Command {
 		Short: "Verify the chosen LLM backend is reachable and replies",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			key := openaiAPIKey
-			if key == "" {
-				key = os.Getenv("OPENAI_API_KEY")
-			}
-			gen, err := llm.NewGenerator(ctx, llm.GeneratorSpec{
-				Backend:       llm.Backend(backend),
-				GeminiAPIKey:  os.Getenv("GEMINI_API_KEY"),
-				OpenAIBaseURL: openaiBaseURL,
-				OpenAIAPIKey:  key,
-			})
+			spec := resolveGeneratorSpec(backend, openaiBaseURL, openaiAPIKey)
+			gen, err := llm.NewGenerator(ctx, spec)
 			if err != nil {
 				return fmt.Errorf("generator: %w", err)
 			}
@@ -441,7 +464,10 @@ func newSmokeCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("generate: %w", err)
 			}
-			fmt.Println("backend:", backend)
+			fmt.Println("backend:", spec.Backend)
+			if spec.Backend == llm.BackendOpenAI {
+				fmt.Println("endpoint:", spec.OpenAIBaseURL)
+			}
 			fmt.Println("model:  ", modelID)
 			fmt.Println("reply:  ", strings.TrimSpace(resp.Text))
 			fmt.Println("----")
@@ -450,11 +476,11 @@ func newSmokeCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&modelID, "model", envOr("WFGUARD_MODEL", defaultModel), "model id")
-	cmd.Flags().StringVar(&backend, "backend", string(llm.BackendGemini), "LLM backend: gemini | openai")
-	cmd.Flags().StringVar(&openaiBaseURL, "openai-base-url", llm.DefaultOpenAIBaseURL, "OpenAI-compatible base URL")
+	cmd.Flags().StringVar(&backend, "backend", "", "LLM backend: gemini | openai. Default gemini, or $WFGUARD_BACKEND")
+	cmd.Flags().StringVar(&openaiBaseURL, "openai-base-url", "", "OpenAI-compatible base URL. Default "+llm.DefaultOpenAIBaseURL+", or $WFGUARD_OPENAI_BASE_URL")
 	// Don't read OPENAI_API_KEY here — Cobra would print it as the default
 	// in `--help`, leaking the secret. Falls back to env at runtime above.
-	cmd.Flags().StringVar(&openaiAPIKey, "openai-api-key", "", "OpenAI API key (or env $OPENAI_API_KEY)")
+	cmd.Flags().StringVar(&openaiAPIKey, "openai-api-key", "", "API key for the OpenAI-compatible endpoint (or env $OPENAI_API_KEY)")
 	return cmd
 }
 
