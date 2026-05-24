@@ -70,6 +70,32 @@ func TestIsSHA(t *testing.T) {
 	}
 }
 
+func TestIsTrustedOrg(t *testing.T) {
+	// Built-in well-known orgs are trusted even without extras.
+	if !resolver.IsTrustedOrg("actions", nil) {
+		t.Error("expected 'actions' to be trusted via well-known list")
+	}
+	// Random org is not trusted by default.
+	if resolver.IsTrustedOrg("acme-corp", nil) {
+		t.Error("expected 'acme-corp' to be untrusted without extras")
+	}
+	// Extras add to the allowlist, case-insensitively and with whitespace tolerance.
+	if !resolver.IsTrustedOrg("Acme-Corp", []string{"acme-corp"}) {
+		t.Error("expected case-insensitive trust match")
+	}
+	if !resolver.IsTrustedOrg("acme-corp", []string{"  Acme-Corp  "}) {
+		t.Error("expected whitespace-tolerant trust match")
+	}
+	// Empty and disjoint extras don't grant trust.
+	if resolver.IsTrustedOrg("acme-corp", []string{"", "  ", "other-org"}) {
+		t.Error("expected no match for disjoint extras")
+	}
+	// Empty owner is never trusted.
+	if resolver.IsTrustedOrg("", []string{""}) {
+		t.Error("empty owner should never be trusted")
+	}
+}
+
 func TestCache_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	c := resolver.NewCache(dir)

@@ -309,3 +309,23 @@ func IsWellKnownOrg(owner string) bool {
 	}
 	return false
 }
+
+// IsTrustedOrg reports whether owner is on the built-in well-known-org list
+// OR on the caller-supplied extras list (case-insensitive, whitespace
+// tolerated). This is the "trust this publisher's tag-based pinning" check
+// the rules use to silence hygiene noise for first-party actions.
+func IsTrustedOrg(owner string, extras []string) bool {
+	if IsWellKnownOrg(owner) {
+		return true
+	}
+	lo := strings.ToLower(strings.TrimSpace(owner))
+	if lo == "" {
+		return false
+	}
+	for _, e := range extras {
+		if strings.EqualFold(strings.TrimSpace(e), lo) {
+			return true
+		}
+	}
+	return false
+}

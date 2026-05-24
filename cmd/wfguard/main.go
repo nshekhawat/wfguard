@@ -74,6 +74,7 @@ type scanFlags struct {
 	backend       string
 	openaiBaseURL string
 	openaiAPIKey  string
+	trustedOrgs   string
 }
 
 func newScanCmd() *cobra.Command {
@@ -107,6 +108,7 @@ func newScanCmd() *cobra.Command {
 	// Cobra prints the default in --help, which would leak the key.
 	// We fall back to the env var at runtime instead.
 	cmd.Flags().StringVar(&f.openaiAPIKey, "openai-api-key", "", "API key for the OpenAI-compatible endpoint (or env $OPENAI_API_KEY). Required by hosted gateways and servers like Unsloth; LM Studio doesn't need one")
+	cmd.Flags().StringVar(&f.trustedOrgs, "trusted-org", envOr("WFGUARD_TRUSTED_ORGS", ""), "comma-separated GitHub orgs to treat as trusted publishers (e.g. your own org). Augments the built-in well-known list; silences unpinned-action and secrets-exposure findings for first-party actions. Also via $WFGUARD_TRUSTED_ORGS")
 	return cmd
 }
 
@@ -127,8 +129,11 @@ func runScan(ctx context.Context, repoPath string, f scanFlags) error {
 
 	// 2. Deterministic rules pass.
 	acc := findings.NewAccumulator()
+	ruleSet := rules.DefaultWithOptions(rules.Options{
+		TrustedOrgs: parseCSV(f.trustedOrgs),
+	})
 	for _, wf := range workflows {
-		for _, r := range rules.Default() {
+		for _, r := range ruleSet {
 			for _, x := range r.Check(wf) {
 				acc.Add(x)
 			}
@@ -522,6 +527,22 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// parseCSV splits a comma-separated string into trimmed, non-empty values.
+// Returns nil for an empty input so callers can ignore the result cleanly.
+func parseCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func configureLogging() {

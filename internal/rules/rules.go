@@ -19,15 +19,31 @@ type Rule interface {
 	Check(*workflow.Workflow) []findings.Finding
 }
 
-// Default returns the standard rule set.
+// Options controls how the default rule set is configured.
+//
+// TrustedOrgs augments the resolver's built-in well-known-org allowlist for
+// any rule that branches on publisher trust (UnpinnedRule, SecretsExposureRule).
+// Other rules ignore it.
+type Options struct {
+	TrustedOrgs []string
+}
+
+// Default returns the standard rule set with no extra configuration. Useful
+// for tests and callers that don't need the trusted-orgs hook.
 func Default() []Rule {
+	return DefaultWithOptions(Options{})
+}
+
+// DefaultWithOptions returns the standard rule set, threading opts through to
+// any rule that honours it.
+func DefaultWithOptions(opts Options) []Rule {
 	return []Rule{
-		UnpinnedRule{},
+		UnpinnedRule{TrustedOrgs: opts.TrustedOrgs},
 		PullRequestTargetCheckoutRule{},
 		KnownBadActionRule{KnownBad: DefaultKnownBad()},
 		BroadPermissionsRule{},
 		ExpressionInjectionRule{},
-		SecretsExposureRule{},
+		SecretsExposureRule{TrustedOrgs: opts.TrustedOrgs},
 		SelfHostedRunnerRule{},
 		ReusableWorkflowInputRule{},
 	}
@@ -46,16 +62,21 @@ func Run(rs []Rule, wf *workflow.Workflow) []findings.Finding {
 // ---- UnpinnedRule ----------------------------------------------------------
 
 // UnpinnedRule flags `uses:` references on a mutable ref (tag or branch) —
-// but only when the publisher isn't on the well-known-orgs allowlist, OR
-// the action has been compromised before. Pinning SHAs everywhere is the
+// but only when the publisher isn't on the trusted-orgs allowlist, OR the
+// action has been compromised before. Pinning SHAs everywhere is the
 // OpenSSF recommendation; in practice it produces overwhelming noise on
 // real repos because most `actions/*` and similarly trusted refs are fine.
 // We focus on the cases where pinning actually buys you something.
-type UnpinnedRule struct{}
+//
+// TrustedOrgs augments the built-in well-known-org allowlist with
+// user-supplied org names (e.g. the scanning org itself, internal vendors).
+type UnpinnedRule struct {
+	TrustedOrgs []string
+}
 
 func (UnpinnedRule) Name() string { return "unpinned-action" }
 
-func (UnpinnedRule) Check(wf *workflow.Workflow) []findings.Finding {
+func (r UnpinnedRule) Check(wf *workflow.Workflow) []findings.Finding {
 	knownBad := DefaultKnownBad()
 	var out []findings.Finding
 	for _, job := range wf.Jobs {
@@ -76,7 +97,7 @@ func (UnpinnedRule) Check(wf *workflow.Workflow) []findings.Finding {
 
 			full := owner + "/" + repo
 			_, isCompromisedHistory := knownBad[full]
-			if resolver.IsWellKnownOrg(owner) && !isCompromisedHistory {
+			if resolver.IsTrustedOrg(owner, r.TrustedOrgs) && !isCompromisedHistory {
 				// Trusted publisher with no incident history — silence the
 				// hygiene noise. Users who want it can lower --min-severity.
 				continue

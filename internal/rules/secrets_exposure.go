@@ -17,11 +17,18 @@ import (
 // The rule deliberately ignores `secrets.GITHUB_TOKEN` on its own — it's
 // auto-managed by the runner and rotates per-job, so the blast radius is
 // bounded. Any other secret in the same `with:` value still triggers.
-type SecretsExposureRule struct{}
+//
+// TrustedOrgs short-circuits the check when the receiving action's publisher
+// is on the trusted-orgs allowlist (built-in well-known orgs plus any extras
+// passed by the user). Trusting an org means accepting the tag-pinning
+// supply-chain risk for actions it publishes.
+type SecretsExposureRule struct {
+	TrustedOrgs []string
+}
 
 func (SecretsExposureRule) Name() string { return "secrets-exposure" }
 
-func (SecretsExposureRule) Check(wf *workflow.Workflow) []findings.Finding {
+func (r SecretsExposureRule) Check(wf *workflow.Workflow) []findings.Finding {
 	var out []findings.Finding
 	for _, job := range wf.Jobs {
 		if job == nil {
@@ -31,8 +38,11 @@ func (SecretsExposureRule) Check(wf *workflow.Workflow) []findings.Finding {
 			if st == nil || !st.IsUses() {
 				continue
 			}
-			_, _, _, ref, err := resolver.ParseUses(st.Uses)
+			owner, _, _, ref, err := resolver.ParseUses(st.Uses)
 			if err != nil || resolver.IsSHA(ref) {
+				continue
+			}
+			if resolver.IsTrustedOrg(owner, r.TrustedOrgs) {
 				continue
 			}
 			// Action is unpinned. Look for non-trivial secret refs in `with:`.

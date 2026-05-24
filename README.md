@@ -155,6 +155,7 @@ By default the deterministic pass alone catches the common patterns
 | `--max-steps` | `15` | Max agent loop iterations per trigger surface |
 | `--min-severity` | `high` | Rendering / exit-code threshold: `critical` \| `high` \| `medium` \| `low`. Findings below this level are computed (and visible to the LLM agent as context) but not surfaced |
 | `--soft-fail` | `false` | Always exit 0. Default exits 1 if any finding lands at or above `--min-severity` |
+| `--trusted-org` | `$WFGUARD_TRUSTED_ORGS` | Comma-separated GitHub orgs to treat as trusted publishers. Augments the built-in well-known list (`actions`, `github`, `docker`, `aws-actions`, `azure`, `google-github-actions`, `hashicorp`, `cloudflare`, `microsoft`). Use this when scanning a repo that consumes its own org's actions by tag — silences `unpinned-action` and `secrets-exposure` for those references. Known-compromised actions still fire. |
 
 ### `smoke` command flags
 
@@ -183,8 +184,8 @@ The deterministic rules cover:
 - **`compromised-action`** *(high)* — references to actions on the known-compromised list (e.g. `tj-actions/changed-files`)
 - **`secrets-exposure`** *(high)* — `secrets.*` passed to an unpinned third-party action
 - **`self-hosted-runner-pr`** *(high)* — self-hosted runner reachable from fork PRs
-- **`reusable-workflow-input-injection`** *(high)* — `${{ inputs.* }}` interpolated into `run:` in a `workflow_call`
-- **`unpinned-action`** *(medium)* — mutable tags / branches **for unverified publishers** or actions with a known compromise history. Hidden by default. (The "pin everything" advice is correct in theory but mostly noise on real repos — `actions/checkout@v4` from a verified org isn't worth a finding. Use `--min-severity low` to see them.)
+- **`reusable-workflow-input-injection`** *(medium)* — `${{ inputs.* }}` interpolated into `run:` in a `workflow_call`. Treated as medium because inputs are caller-controlled, not directly attacker-controlled; escalate to high in your own review once you find a caller that forwards `github.event.*` (PR title, issue body, fork ref, etc.) into the input. Cross-workflow call-graph analysis is on the roadmap. Hidden by default.
+- **`unpinned-action`** *(medium)* — mutable tags / branches **for unverified publishers** or actions with a known compromise history. Hidden by default. (The "pin everything" advice is correct in theory but mostly noise on real repos — `actions/checkout@v4` from a verified org isn't worth a finding. Use `--min-severity low` to see them, or `--trusted-org my-org` to extend the trusted-publisher list.)
 - **`broad-permissions`** *(medium/low)* — explicit `permissions: write-all` (medium) or missing `permissions:` block (low; mostly silenced by GitHub's modern read-only default). Hidden by default.
 
 The LLM agent adds (when `--llm` is set):
@@ -256,6 +257,7 @@ Explicit flags always override env vars.
 | `GEMINI_API_KEY` | Gemini backend | Required when `WFGUARD_BACKEND=gemini` (the default) and you use `--llm`/`--harden` |
 | `WFGUARD_OPENAI_BASE_URL` | OpenAI backend | Base URL incl. `/v1`, e.g. `http://192.168.1.2:8888/v1`. Equivalent to `--openai-base-url`. Default `http://localhost:1234/v1` |
 | `OPENAI_API_KEY` | OpenAI backend | API key for the endpoint. Required by gateways and servers like Unsloth; leave blank for servers that don't authenticate (default LM Studio, Ollama) |
+| `WFGUARD_TRUSTED_ORGS` | rules | Comma-separated GitHub orgs to treat as trusted publishers. Equivalent to `--trusted-org` |
 | `WFGUARD_LOG_LEVEL` | logging | `debug` \| `info` \| `warn` \| `error`. Default `info` |
 
 ---
