@@ -112,7 +112,7 @@ func newScanCmd() *cobra.Command {
 
 // runScan is the testable body of the scan subcommand.
 func runScan(ctx context.Context, repoPath string, f scanFlags) error {
-	slog.Info("scan", "path", repoPath, "report", f.reportFmt,
+	slog.Debug("scan", "path", repoPath, "report", f.reportFmt,
 		"llm", f.useLLM, "harden", f.harden, "backend", effectiveBackend(f.backend))
 
 	// 1. Ingest.
@@ -123,7 +123,7 @@ func runScan(ctx context.Context, repoPath string, f scanFlags) error {
 	if len(workflows) == 0 {
 		return fmt.Errorf("no workflows found under %s/.github/workflows", repoPath)
 	}
-	slog.Info("ingest", "workflows", len(workflows))
+	slog.Debug("ingest", "workflows", len(workflows))
 
 	// 2. Deterministic rules pass.
 	acc := findings.NewAccumulator()
@@ -135,7 +135,7 @@ func runScan(ctx context.Context, repoPath string, f scanFlags) error {
 		}
 	}
 	deterministicCount := acc.Len()
-	slog.Info("rules pass", "findings", deterministicCount)
+	slog.Debug("rules pass", "findings", deterministicCount)
 
 	// 3. The LLM stages (agent + hardener) share one Generator. Build it
 	// once if either is requested.
@@ -153,7 +153,7 @@ func runScan(ctx context.Context, repoPath string, f scanFlags) error {
 		if err := runAgentPass(ctx, gen, workflows, acc, f); err != nil {
 			slog.Error("llm pass failed", "err", err)
 		}
-		slog.Info("llm pass", "agent_findings", acc.Len()-deterministicCount)
+		slog.Debug("llm pass", "agent_findings", acc.Len()-deterministicCount)
 	}
 
 	// 5. Render. Findings below the threshold are computed (so the LLM
@@ -164,10 +164,11 @@ func runScan(ctx context.Context, repoPath string, f scanFlags) error {
 	}
 	all := acc.All()
 	visible := findings.FilterByMinSeverity(all, threshold)
-	if hidden := len(all) - len(visible); hidden > 0 {
-		slog.Info("findings hidden below threshold", "hidden", hidden, "threshold", threshold)
-	}
-	if err := writeReport(f.reportFmt, f.output, visible); err != nil {
+	hidden := len(all) - len(visible)
+	slog.Debug("findings hidden below threshold", "hidden", hidden, "threshold", threshold)
+
+	exitOnFindings := !f.softFail && len(visible) > 0
+	if err := renderReport(f, visible, len(workflows), hidden, string(threshold), exitOnFindings); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
 
@@ -179,11 +180,29 @@ func runScan(ctx context.Context, repoPath string, f scanFlags) error {
 	}
 
 	// 7. Exit code: any visible finding fails the run unless --soft-fail.
-	if !f.softFail && len(visible) > 0 {
-		slog.Warn("findings at or above threshold", "count", len(visible), "threshold", threshold)
+	// The terminal renderer already announced this in its footer; the
+	// markdown path doesn't need a slog WARN noise line either.
+	if exitOnFindings {
 		os.Exit(1)
 	}
 	return nil
+}
+
+// renderReport picks between the human-friendly terminal renderer (when
+// markdown is going to a TTY stdout) and the canonical writeReport path
+// (everything else — file output, SARIF, pipes). The terminal renderer is
+// purely a presentation layer; the underlying findings are identical.
+func renderReport(f scanFlags, fs []findings.Finding, workflowCount, hidden int, threshold string, exitOnFindings bool) error {
+	if f.reportFmt == "markdown" && f.output == "" && report.IsTerminal(os.Stdout) {
+		return report.WriteTerminal(os.Stdout, fs, report.TerminalOptions{
+			Color:          true,
+			Workflows:      workflowCount,
+			Hidden:         hidden,
+			Threshold:      threshold,
+			ExitOnFindings: exitOnFindings,
+		})
+	}
+	return writeReport(f.reportFmt, f.output, fs)
 }
 
 // buildGenerator constructs the LLM Generator from CLI flags + env. Shared
@@ -506,15 +525,30 @@ func envOr(key, def string) string {
 }
 
 func configureLogging() {
-	lvl := slog.LevelInfo
+	// Default is WARN: the interactive UX is the report itself, not a stream
+	// of routine info logs. Bump to info/debug via WFGUARD_LOG_LEVEL when
+	// you need plumbing visibility (--llm runs, harden retries, etc.).
+	lvl := slog.LevelWarn
 	switch strings.ToLower(os.Getenv("WFGUARD_LOG_LEVEL")) {
 	case "debug":
 		lvl = slog.LevelDebug
+	case "info":
+		lvl = slog.LevelInfo
 	case "warn":
 		lvl = slog.LevelWarn
 	case "error":
 		lvl = slog.LevelError
 	}
-	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})
+	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: lvl,
+		// Drop the timestamp prefix — it eats horizontal space on a terminal
+		// without telling anyone anything they don't already know.
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		},
+	})
 	slog.SetDefault(slog.New(h))
 }
