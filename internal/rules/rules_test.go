@@ -87,7 +87,7 @@ func TestRules_OnTestdata(t *testing.T) {
 			name:    "reusable_workflow",
 			fixture: "reusable_workflow.yml",
 			expectKinds: map[string]findings.Severity{
-				"reusable-workflow-input-injection": findings.High,
+				"reusable-workflow-input-injection": findings.Medium,
 			},
 		},
 	}
@@ -190,6 +190,73 @@ func TestUnpinnedRule_SilentOnTrustedPublisherTag(t *testing.T) {
 	}
 	if got := (rules.UnpinnedRule{}).Check(wf); len(got) != 0 {
 		t.Errorf("UnpinnedRule fired on trusted publisher @v4: %v", got)
+	}
+}
+
+func TestUnpinnedRule_TrustedOrgsSilencesNoise(t *testing.T) {
+	// thirdparty-vendor is NOT on the built-in well-known list, so the rule
+	// normally fires (covered by TestUnpinnedRule_FlagsTagOnUnverifiedPublisher).
+	// With TrustedOrgs adding the same owner, it should fall silent — that's
+	// the whole point of the --trusted-org flag.
+	wf := &workflow.Workflow{
+		Path: "x.yml",
+		Jobs: map[string]*workflow.Job{
+			"j": {
+				ID: "j",
+				Steps: []*workflow.Step{
+					{Index: 0, Uses: "thirdparty-vendor/some-tool@v1"},
+				},
+			},
+		},
+	}
+	r := rules.UnpinnedRule{TrustedOrgs: []string{"ThirdParty-Vendor"}}
+	if got := r.Check(wf); len(got) != 0 {
+		t.Errorf("UnpinnedRule fired despite trusted-org match (case-insensitive): %v", got)
+	}
+}
+
+func TestUnpinnedRule_TrustedOrgsStillFiresForKnownBad(t *testing.T) {
+	// Even if you trust tj-actions, the rule must still fire because of the
+	// compromised-history short-circuit. Trust isn't a free pass.
+	wf := &workflow.Workflow{
+		Path: "x.yml",
+		Jobs: map[string]*workflow.Job{
+			"j": {
+				ID: "j",
+				Steps: []*workflow.Step{
+					{Index: 0, Uses: "tj-actions/changed-files@v44"},
+				},
+			},
+		},
+	}
+	r := rules.UnpinnedRule{TrustedOrgs: []string{"tj-actions"}}
+	if got := r.Check(wf); len(got) != 1 {
+		t.Errorf("UnpinnedRule should still fire for known-bad even when org is trusted, got %d", len(got))
+	}
+}
+
+func TestSecretsExposureRule_TrustedOrgsSilencesNoise(t *testing.T) {
+	wf := &workflow.Workflow{
+		Path: "x.yml",
+		Jobs: map[string]*workflow.Job{
+			"j": {
+				ID: "j",
+				Steps: []*workflow.Step{
+					{Index: 0, Uses: "thirdparty-vendor/some-tool@v1", With: map[string]any{
+						"token": "${{ secrets.MY_TOKEN }}",
+					}},
+				},
+			},
+		},
+	}
+	// Without trust: rule fires (unpinned + secret).
+	if got := (rules.SecretsExposureRule{}).Check(wf); len(got) != 1 {
+		t.Fatalf("baseline: SecretsExposureRule should fire, got %d", len(got))
+	}
+	// With trust: silent.
+	r := rules.SecretsExposureRule{TrustedOrgs: []string{"thirdparty-vendor"}}
+	if got := r.Check(wf); len(got) != 0 {
+		t.Errorf("SecretsExposureRule fired despite trusted-org match: %v", got)
 	}
 }
 
