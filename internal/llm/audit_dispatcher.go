@@ -60,7 +60,7 @@ func (d *AuditDispatcher) Dispatch(ctx context.Context, name string, args map[st
 	case "submit_finding":
 		return d.submitFinding(args)
 	}
-	return nil, fmt.Errorf("unknown tool: %q", name)
+	return nil, fmt.Errorf("%w: %q", ErrUnknownTool, name)
 }
 
 // ----- list_workflows -------------------------------------------------------
@@ -292,7 +292,7 @@ func (d *AuditDispatcher) submitFinding(args map[string]any) (any, error) {
 
 	severity := findings.Severity(strings.ToLower(strings.TrimSpace(sev)))
 	if severity.Order() == 0 {
-		return nil, fmt.Errorf("invalid severity %q (use low|medium|high|critical)", sev)
+		return nil, fmt.Errorf("%w: severity %q (use low|medium|high|critical)", ErrBadArg, sev)
 	}
 	if d.Acc == nil {
 		return nil, fmt.Errorf("accumulator not configured")

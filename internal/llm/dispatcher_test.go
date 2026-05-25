@@ -30,8 +30,15 @@ func TestRegistry_DispatchRoutesToHandler(t *testing.T) {
 
 func TestRegistry_DispatchUnknownToolErrors(t *testing.T) {
 	r := llm.NewRegistry()
-	if _, err := r.Dispatch(context.Background(), "nope", nil); err == nil {
-		t.Error("expected error on unknown tool")
+	_, err := r.Dispatch(context.Background(), "nope", nil)
+	if err == nil {
+		t.Fatal("expected error on unknown tool")
+	}
+	if !errors.Is(err, llm.ErrUnknownTool) {
+		t.Errorf("err = %v, want wrapping ErrUnknownTool", err)
+	}
+	if !llm.IsModelToolError(err) {
+		t.Error("unknown-tool should classify as a model-side error")
 	}
 }
 
@@ -66,11 +73,41 @@ func TestString_RequiredArg(t *testing.T) {
 	if err != nil || got != "value" {
 		t.Errorf("String OK case: got=%q err=%v", got, err)
 	}
-	if _, err := llm.String(args, "missing"); err == nil {
-		t.Error("missing required arg should error")
+
+	_, err = llm.String(args, "missing")
+	if err == nil {
+		t.Fatal("missing required arg should error")
 	}
-	if _, err := llm.String(map[string]any{"x": 7}, "x"); err == nil {
-		t.Error("non-string value should error")
+	if !errors.Is(err, llm.ErrMissingArg) {
+		t.Errorf("err = %v, want wrapping ErrMissingArg", err)
+	}
+
+	_, err = llm.String(map[string]any{"x": 7}, "x")
+	if err == nil {
+		t.Fatal("non-string value should error")
+	}
+	if !errors.Is(err, llm.ErrBadArg) {
+		t.Errorf("err = %v, want wrapping ErrBadArg", err)
+	}
+}
+
+func TestIsModelToolError(t *testing.T) {
+	if !llm.IsModelToolError(llm.ErrMissingArg) {
+		t.Error("ErrMissingArg should be model error")
+	}
+	if !llm.IsModelToolError(llm.ErrBadArg) {
+		t.Error("ErrBadArg should be model error")
+	}
+	if !llm.IsModelToolError(llm.ErrUnknownTool) {
+		t.Error("ErrUnknownTool should be model error")
+	}
+	// Wrapped form still classifies correctly.
+	wrapped := errors.New("github 403: rate limit")
+	if llm.IsModelToolError(wrapped) {
+		t.Error("runtime errors must not classify as model errors")
+	}
+	if llm.IsModelToolError(nil) {
+		t.Error("nil must not classify as a model error")
 	}
 }
 
