@@ -2,8 +2,29 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
+
+// Tool-call error sentinels. These distinguish "the model emitted a
+// malformed tool call" (ErrMissingArg, ErrBadArg, ErrUnknownTool) from
+// "the tool ran and failed for an external reason" (any other error). The
+// agent loop classifies on these via errors.Is to label the WARN log.
+var (
+	ErrMissingArg  = errors.New("missing required arg")
+	ErrBadArg      = errors.New("bad arg")
+	ErrUnknownTool = errors.New("unknown tool")
+)
+
+// IsModelToolError reports whether err is a model-side tool-call mistake
+// (bad/missing argument, unknown tool name) rather than a runtime failure
+// inside the tool implementation. Used by the agent loop for log
+// categorisation; callers shouldn't branch on it for control flow.
+func IsModelToolError(err error) bool {
+	return errors.Is(err, ErrMissingArg) ||
+		errors.Is(err, ErrBadArg) ||
+		errors.Is(err, ErrUnknownTool)
+}
 
 // Dispatcher is the bridge between tool-call names emitted by Gemma 4 and
 // the Go functions that actually do the work. The Agent calls Dispatch
@@ -38,22 +59,24 @@ func (r *Registry) Register(name string, h Handler) {
 func (r *Registry) Dispatch(ctx context.Context, name string, args map[string]any) (any, error) {
 	h, ok := r.handlers[name]
 	if !ok {
-		return nil, fmt.Errorf("unknown tool: %q", name)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownTool, name)
 	}
 	return h(ctx, args)
 }
 
 // ---- helpers for handlers --------------------------------------------------
 
-// String pulls a required string arg from the model's args map.
+// String pulls a required string arg from the model's args map. Returns an
+// error wrapping ErrMissingArg / ErrBadArg when the arg is absent or the
+// wrong type, so the agent loop can classify the failure as a model mistake.
 func String(args map[string]any, key string) (string, error) {
 	v, ok := args[key]
 	if !ok {
-		return "", fmt.Errorf("missing required arg %q", key)
+		return "", fmt.Errorf("%w: %q", ErrMissingArg, key)
 	}
 	s, ok := v.(string)
 	if !ok {
-		return "", fmt.Errorf("arg %q: expected string, got %T", key, v)
+		return "", fmt.Errorf("%w: %q expected string, got %T", ErrBadArg, key, v)
 	}
 	return s, nil
 }

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 )
@@ -61,6 +62,11 @@ func (a *Agent) Run(ctx context.Context, userMsg string) error {
 	history := []Turn{{Role: RoleUser, Text: userMsg}}
 	tools := ToolDecls()
 
+	// Per-surface counters for the end-of-run summary. Model errors mean
+	// the LLM emitted a malformed tool call (bad/missing arg, unknown tool);
+	// runtime errors mean the tool ran and failed (resolver, GitHub API, etc.).
+	var modelErrs, runtimeErrs int
+
 	for step := 0; step < a.MaxSteps; step++ {
 		req := GenerateRequest{
 			System:      a.System,
@@ -83,7 +89,15 @@ func (a *Agent) Run(ctx context.Context, userMsg string) error {
 		history = append(history, assistant)
 
 		if len(resp.ToolCalls) == 0 {
-			logger.Debug("agent terminated cleanly", "steps", step)
+			logger.Debug("agent terminated cleanly", "steps", step,
+				"model_errors", modelErrs, "runtime_errors", runtimeErrs)
+			if modelErrs > 0 || runtimeErrs > 0 {
+				logger.Info("agent surface complete",
+					"steps", step,
+					"model_errors", modelErrs,
+					"runtime_errors", runtimeErrs,
+					"terminated", "clean")
+			}
 			return nil
 		}
 
@@ -94,7 +108,16 @@ func (a *Agent) Run(ctx context.Context, userMsg string) error {
 			logger.Debug("tool call", "name", fc.Name, "args", fc.Args)
 			out, err := a.Dispatcher.Dispatch(ctx, fc.Name, fc.Args)
 			if err != nil {
-				logger.Warn("tool error", "name", fc.Name, "err", err)
+				category := classifyToolErr(err)
+				if category == "model" {
+					modelErrs++
+				} else {
+					runtimeErrs++
+				}
+				logger.Warn("tool call rejected",
+					"name", fc.Name,
+					"category", category,
+					"err", err)
 				out = map[string]any{"error": err.Error()}
 			}
 			results = append(results, ToolResult{
@@ -106,5 +129,25 @@ func (a *Agent) Run(ctx context.Context, userMsg string) error {
 		history = append(history, Turn{Role: RoleTool, ToolResults: results})
 	}
 
+	logger.Info("agent surface complete",
+		"steps", a.MaxSteps,
+		"model_errors", modelErrs,
+		"runtime_errors", runtimeErrs,
+		"terminated", "max_steps")
 	return fmt.Errorf("max steps (%d) reached without termination", a.MaxSteps)
+}
+
+// classifyToolErr labels a dispatcher error as "model" (the LLM emitted a
+// malformed tool call — bad/missing arg, unknown tool, unrecognised value)
+// or "runtime" (the tool ran and the underlying op failed: resolver fetch,
+// GitHub 403, advisory lookup, etc.). Used purely for log categorisation.
+func classifyToolErr(err error) string {
+	switch {
+	case errors.Is(err, ErrMissingArg),
+		errors.Is(err, ErrBadArg),
+		errors.Is(err, ErrUnknownTool):
+		return "model"
+	default:
+		return "runtime"
+	}
 }
