@@ -1,13 +1,13 @@
 module github.com/nshekhawat/wfguard
 
-go 1.26
+go 1.27.3
 
 require (
 	github.com/google/go-github/v66 v66.0.0
 	github.com/owenrumney/go-sarif/v2 v2.3.3
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/spf13/cobra v1.10.2
-	google.golang.org/genai v1.56.0
+	google.golang.org/genai v1.76.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
